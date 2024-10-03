@@ -1,0 +1,191 @@
+-- StarterPlayerScripts/CoinCollectorScript.lua
+
+local Octree = loadstring(game:HttpGet("https://raw.githubusercontent.com/Sleitnick/rbxts-octo-tree/main/src/init.lua", true))()
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+local character, humanoidRootPart
+local collecting = false
+local coinsCollected = 0
+
+-- Create GUI
+local screenGui = Instance.new("ScreenGui")
+screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 200, 0, 100)
+frame.Position = UDim2.new(0.5, -100, 0.1, 0)
+frame.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+frame.Parent = screenGui
+
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Size = UDim2.new(1, 0, 0, 50)
+titleLabel.Text = "Coin Collector"
+titleLabel.TextColor3 = Color3.new(1, 1, 1)
+titleLabel.BackgroundTransparency = 1
+titleLabel.Parent = frame
+
+local coinsLabel = Instance.new("TextLabel")
+coinsLabel.Size = UDim2.new(1, 0, 0, 30)
+coinsLabel.Position = UDim2.new(0, 0, 0.5, -15)
+coinsLabel.Text = "Coins Collected: 0"
+coinsLabel.TextColor3 = Color3.new(1, 1, 1)
+coinsLabel.BackgroundTransparency = 1
+coinsLabel.Parent = frame
+
+local toggleButton = Instance.new("TextButton")
+toggleButton.Size = UDim2.new(1, 0, 0, 30)
+toggleButton.Position = UDim2.new(0, 0, 1, -10)
+toggleButton.Text = "Start Collecting"
+toggleButton.TextColor3 = Color3.new(0, 0, 0)
+toggleButton.Parent = frame
+
+-- Draggable functionality
+local dragging
+local dragInput
+local dragStart
+local startPos
+
+local function updateInput(input)
+    local delta = input.Position - dragStart
+    frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+end
+
+frame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        startPos = frame.Position
+
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+
+frame.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement then
+        dragInput = input
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and input == dragInput then
+        updateInput(input)
+    end
+end)
+
+-- Wait for the player's character to load
+LocalPlayer.CharacterAdded:Wait()
+character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+
+local coinContainer = game.Workspace:FindFirstChild("CoinContainer")
+if not coinContainer then
+    error("CoinContainer not found in Workspace!")
+end
+
+local octree = Octree.new()
+local radius = 80 -- Radius to search for coins
+
+-- Set the collision state of character's parts
+local function setCharacterCollision(state)
+    for _, part in pairs(character:GetDescendants()) do
+        if part:IsA("BasePart") or part:IsA("MeshPart") then
+            part.CanCollide = state
+        end
+    end
+end
+
+-- Move the character to a target position
+local function moveToPosition(targetPosition, duration)
+    local startPosition = humanoidRootPart.Position
+    local startTime = tick()
+
+    setCharacterCollision(false)
+    local bodyPosition = Instance.new("BodyPosition", humanoidRootPart)
+    bodyPosition.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    bodyPosition.P = 1000
+    bodyPosition.D = 1000
+
+    while true do
+        local elapsedTime = tick() - startTime
+        local alpha = math.min(elapsedTime / duration, 1)
+        humanoidRootPart.Position = startPosition:Lerp(targetPosition, alpha)
+
+        if alpha >= 1 then break end
+        task.wait()
+    end
+
+    bodyPosition:Destroy()
+    setCharacterCollision(true)
+end
+
+-- Collect coins
+local function collectCoins()
+    collecting = true
+
+    local function populateOctree()
+        octree:ClearAllNodes()
+        for _, coin in pairs(coinContainer:GetChildren()) do
+            if coin:IsA("MeshPart") and coin.Material == Enum.Material.Glass then
+                octree:CreateNode(coin.Position, coin)
+            end
+        end
+    end
+
+    populateOctree()
+
+    while collecting do
+        humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+
+        local nearestNode = octree:GetNearest(humanoidRootPart.Position, radius, 1)[1]
+
+        if nearestNode then
+            local closestCoin = nearestNode.Object
+            local distance = (humanoidRootPart.Position - closestCoin.Position).Magnitude
+            local duration = distance / 26 -- Default walk speed
+
+            moveToPosition(closestCoin.Position, duration)
+            closestCoin:Destroy() -- Collect the coin
+            octree:RemoveNode(nearestNode)
+
+            coinsCollected += 1
+            coinsLabel.Text = "Coins Collected: " .. coinsCollected
+
+            if #octree:GetAllNodes() == 0 then
+                populateOctree()
+            end
+        else
+            task.wait(1)
+            populateOctree()
+        end
+
+        task.wait(0.1) -- Delay before the next iteration
+    end
+end
+
+-- Toggle collection on button click
+toggleButton.MouseButton1Click:Connect(function()
+    if collecting then
+        collecting = false
+        toggleButton.Text = "Start Collecting"
+    else
+        collecting = true
+        toggleButton.Text = "Stop Collecting"
+        coroutine.wrap(collectCoins)()
+    end
+end)
+
+-- Clean up on character removal
+LocalPlayer.CharacterRemoving:Connect(function()
+    character = nil
+    humanoidRootPart = nil
+end)
+
+Players.PlayerRemoving:Connect(function()
+    character = nil
+    humanoidRootPart = nil
+end)
